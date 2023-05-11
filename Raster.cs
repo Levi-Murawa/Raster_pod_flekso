@@ -8,6 +8,7 @@
 
 using Emgu.CV;
 using Emgu.CV.CvEnum;
+using Emgu.CV.Structure;
 using System;
 using System.Drawing;
 using System.Text;
@@ -23,6 +24,16 @@ namespace UVtools.ScriptSample;
 /// </summary>
 public class Raster : ScriptGlobals
 {
+    readonly ScriptNumericalInput<ushort> Layer = new()
+    {
+        Label = "Ile warstw ma być rastrem",
+        ToolTip = "Podaj liczbę warstw, które mają stanowić raster",
+        Unit = "warstwy",
+        Minimum = 1,
+        Maximum = ushort.MaxValue,
+        Increment = 1,
+        Value = 10
+    };
     readonly ScriptNumericalInput<ushort> InsetMarginFromEdge = new()
     {
         Label = "Inset from edge",
@@ -33,7 +44,6 @@ public class Raster : ScriptGlobals
         Increment = 1,
         Value = 10
     };
-
     readonly ScriptNumericalInput<ushort> InsetThickness = new()
     {
         Label = "Inset line thickness",
@@ -56,6 +66,7 @@ public class Raster : ScriptGlobals
         Script.Version = new Version(0, 1);
         Script.UserInputs.AddRange(new[]
         {
+            Layer,
             InsetMarginFromEdge,
             InsetThickness  
         });
@@ -68,7 +79,11 @@ public class Raster : ScriptGlobals
     public string? ScriptValidate()
     {
         StringBuilder sb = new();
-            
+
+        if (Layer.Value < Layer.Minimum)
+        {
+            sb.AppendLine($"Inset thickness must be at least {Layer.Minimum}{Layer.Unit}");
+        }
         if (InsetMarginFromEdge.Value < InsetMarginFromEdge.Minimum)
         {
             sb.AppendLine($"Inset edge margin must be at least {InsetMarginFromEdge.Minimum}{InsetMarginFromEdge.Unit}");
@@ -77,6 +92,7 @@ public class Raster : ScriptGlobals
         {
             sb.AppendLine($"Inset thickness must be at least {InsetThickness.Minimum}{InsetThickness.Unit}");
         }
+
             
         return sb.ToString();
     }
@@ -96,35 +112,40 @@ public class Raster : ScriptGlobals
         Parallel.For(Operation.LayerIndexStart, Operation.LayerIndexEnd+1, CoreSettings.GetParallelOptions(Progress), layerIndex =>
         {
             Progress.PauseIfRequested();
-            var layer = SlicerFile[layerIndex]; // Unpack and expose layer variable for easier use
-            using var mat = layer.LayerMat;     // Gets this layer mat/image
-            var original = mat.Clone();     // Keep a original mat copy
-            using var erodeMat = new Mat();     // Creates a temporary mat for the eroded image
-            using var wallMat = new Mat();      // Creates a temporary mat for the wall image
+            if(layerIndex > Operation.LayerIndexEnd - Layer.Value)
+            {
+                var layer = SlicerFile[layerIndex]; // Unpack and expose layer variable for easier use
+                using var mat = layer.LayerMat;     // Gets this layer mat/image
+                var original = mat.Clone();     // Keep a original mat copy
+                using var erodeMat = new Mat();     // Creates a temporary mat for the eroded image
+                using var wallMat = new Mat();      // Creates a temporary mat for the wall image
+                using var matImage = CvInvoke.Imread("C:/Users/Tomek/PycharmProjects/rasteryzacja_pod_flekso/Raster_pod_flekso/Gotowe/Rasteryzacja_20_pixeli.png", ImreadModes.Grayscale);
 
-            var target = Operation.GetRoiOrDefault(mat); // Get ROI from mat if user selected an region
+                var target = Operation.GetRoiOrDefault(mat); // Get ROI from mat if user selected an region
 
-            // Erode original image by InsetMarginFromEdge pixels, so we get the offset margin from image and put new image on erodeMat
-            CvInvoke.Erode(target, erodeMat, kernel, EmguExtensions.AnchorCenter, InsetMarginFromEdge.Value, BorderType.Reflect101, default);
+                //CvInvoke Class należy do Emgu CV
+                // Erode original image by InsetMarginFromEdge pixels, so we get the offset margin from image and put new image on erodeMat
+                CvInvoke.Erode(target, erodeMat, kernel, EmguExtensions.AnchorCenter, InsetMarginFromEdge.Value, BorderType.Reflect101, default);
 
-            // Now erode the eroded image with InsetThickness pixels, so we get the original-margin-thickness image and put the new image on wallMat
-            CvInvoke.Erode(erodeMat, wallMat, kernel, EmguExtensions.AnchorCenter, InsetThickness.Value, BorderType.Reflect101, default);
+                // Now erode the eroded image with InsetThickness pixels, so we get the original-margin-thickness image and put the new image on wallMat
+                CvInvoke.Erode(erodeMat, wallMat, kernel, EmguExtensions.AnchorCenter, InsetThickness.Value, BorderType.Reflect101, default);
 
-            // Subtract walls image from eroded image, so we get only the inset line pixels in white and put back into wallMat
-            CvInvoke.Subtract(erodeMat, wallMat, wallMat);
+                // Subtract walls image from eroded image, so we get only the inset line pixels in white and put back into wallMat
+                CvInvoke.Subtract(erodeMat, wallMat, wallMat);
 
-            // Invert pixels of wallMat so the whites will become black and blacks whites
-            CvInvoke.BitwiseNot(wallMat, wallMat);
+                // Invert pixels of wallMat so the whites will become black and blacks whites
+                CvInvoke.BitwiseNot(wallMat, wallMat);
 
-            // Bitwise And original image with the modified image and put back into mat
-            // This will keep only the pixels that are positive in both mat's, so mat[n] & wallMat[n] must both have a positive pixel value (> 0)
-            CvInvoke.BitwiseAnd(target, wallMat, target);
+                // Bitwise And original image with the modified image and put back into mat
+                // This will keep only the pixels that are positive in both mat's, so mat[n] & wallMat[n] must both have a positive pixel value (> 0)
+                CvInvoke.BitwiseAnd(target, wallMat, target);
 
-            // Apply the results only to the selected masked area, if user selected one
-            Operation.ApplyMask(original, target);
+                // Apply the results only to the selected masked area, if user selected one
+                Operation.ApplyMask(original, target);
 
-            // Set current layer image with the modified mat we just manipulated
-            layer.LayerMat = mat;
+                // Set current layer image with the modified mat we just manipulated
+                layer.LayerMat = matImage;
+            }
 
             // Increment progress bar by 1
             Progress.LockAndIncrement();
